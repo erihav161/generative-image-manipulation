@@ -1,8 +1,10 @@
 # Learning generative image manipulations
 
-Master thesis project @ Örebro University
+Master thesis project @ [Örebro University](oru.se)
 
-Using [x]python and [x]pytorch
+Using 
+- [x] python
+- [x] pytorch
 
 ## Files:
 ### gimli.py 
