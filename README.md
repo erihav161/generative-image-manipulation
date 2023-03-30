@@ -2,7 +2,7 @@
 
 Master thesis project @ Örebro University
 
-Using '''python and '''pytorch
+Using [x]python and [x]pytorch
 
 ## Files:
 ### gimli.py 
