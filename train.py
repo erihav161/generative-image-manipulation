@@ -19,8 +19,6 @@
 #!/usr/bin/python
 
 import argparse
-import sys
-import time
 import datasets
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
@@ -31,26 +29,17 @@ from torch.nn.utils import clip_grad_norm_
 import torch.utils.data
 import torchvision
 from torchvision.utils import save_image
-from transformers import BertTokenizer
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm, trange
-import matplotlib.pyplot as plt
-import gimli
+import gimli_v2
 
 writer = SummaryWriter()
-# Room for input argument handling code
-#  *
-#  *
-#  *
-#  *
-#  *
-#____________________________________
 
-def load_dataset(): # use load_dataset(opt) if multiple datasets and models are available
+def load_dataset(dir_path): 
     print('\nInitializing dataset!')
     print('\n==> Train data...')
     trainset = datasets.CSSDataset(
-        path='../',
+        path=dir_path,
         split='train',
         transform=torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
@@ -60,7 +49,7 @@ def load_dataset(): # use load_dataset(opt) if multiple datasets and models are 
     )
     print('==> Test data...\n')
     testset = datasets.CSSDataset(
-        path='../',
+        path=dir_path,
         split='test',
         transform=torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
@@ -78,22 +67,24 @@ def train(data, model, lang_model, optimizer, epoch, args):
     model.train()
     
 
-       
-    if args.loss == 'mse':
-        criterion = nn.MSELoss(reduction='mean')
     avg_loss = 0.0
     n_batches = 0
     epoch_loss = []
     progress_bar = tqdm(data)
+    criterion = nn.MSELoss(reduction='mean')
     for batch_idx, sample_batched in enumerate(progress_bar):
         
         assert type(sample_batched) is list
         src_img = np.stack([d['source_img_data'] for d in sample_batched])
         src_img = torch.from_numpy(src_img).float()
-        src_img = torch.autograd.Variable(src_img).cuda()
         target_img = np.stack([d['target_img_data'] for d in sample_batched])
         target_img = torch.from_numpy(target_img).float()
-        target_img = torch.autograd.Variable(target_img).cuda()
+        if torch.cuda.device_count() > 0 and args.cuda:
+            src_img = torch.autograd.Variable(src_img).cuda()
+            target_img = torch.autograd.Variable(target_img).cuda()
+        else:
+            src_img = torch.autograd.Variable(src_img).cpu()
+            target_img = torch.autograd.Variable(target_img).cpu()
         action_list = [str(d['mod']['str']) for d in sample_batched]
         action_embeddings = lang_model.encode(action_list)
         embedding_tensor = torch.from_numpy(action_embeddings)
@@ -103,13 +94,30 @@ def train(data, model, lang_model, optimizer, epoch, args):
         model.zero_grad()
         output, _, _ ,_ = model(src_img, embedding_tensor)
         
-        if args.loss == 'loglikelihood':
-            loss = F.nll_loss(output, target_img)
+        loss = criterion(output, target_img)
+        
+        # Higher weights on pixels that change more
+        # Weight decay depending on number of epochs
+        weight_value = 0
+        tot_epochs = args.from_epoch + args.epochs
+        if 0 <= (args.from_epoch + epoch) < (tot_epochs / 4):
+            weight_value = 999
+        elif (tot_epochs / 4) <= (args.from_epoch + epoch) < (tot_epochs / 2):
+            weight_value = 99
+        elif (tot_epochs / 2) <= (args.from_epoch + epoch) < (3 * tot_epochs / 4):
+            weight_value = 9
+        elif (args.from_epoch + epoch) > (3 * tot_epochs / 4):
+            weight_value = 0
+        weight = ((src_img - target_img)**2)*weight_value + 1
+        if torch.cuda.device_count() > 0 and args.cuda:
+            weight = weight.type(torch.FloatTensor).cuda()
         else:
-            loss = criterion(output, target_img)
+            weight = weight.type(torch.FloatTensor).cpu()
+        loss = loss*weight
+        loss = loss.mean()
         
         # Bacward pass
-        loss.bacward()
+        loss.backward()
         
         # Store loss for tracking
         epoch_loss.append(loss.item())
@@ -159,10 +167,14 @@ def test(data, model, lang_model, epoch, args):
         assert type(sample_batched) is list
         src_img = np.stack([d['source_img_data'] for d in sample_batched])
         src_img = torch.from_numpy(src_img).float()
-        src_img = torch.autograd.Variable(src_img).cuda()
         target_img = np.stack([d['target_img_data'] for d in sample_batched])
         target_img = torch.from_numpy(target_img).float()
-        target_img = torch.autograd.Variable(target_img).cuda()
+        if torch.cuda.device_count() > 0 and args.cuda:
+            src_img = torch.autograd.Variable(src_img).cuda()
+            target_img = torch.autograd.Variable(target_img).cuda()
+        else:
+            src_img = torch.autograd.Variable(src_img).cpu()
+            target_img = torch.autograd.Variable(target_img).cpu()
         action_list = [str(d['mod']['str']) for d in sample_batched]
         action_embeddings = lang_model.encode(action_list)
         embedding_tensor = torch.from_numpy(action_embeddings)
@@ -198,11 +210,11 @@ def main(args):
     args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 
-    trainset, testset = load_dataset()
+    trainset, testset = load_dataset(args.data_dir)
     train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True)
     test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle)
 
-    model = gimli.generator()
+    model = gimli_v2.generator()
     print(model)
     # language_model = SentenceTransformer('all-MiniLM-L6-v2')
     language_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
@@ -214,7 +226,7 @@ def main(args):
     if args.cuda:
         model.cuda()
     
-    model.apply(gimli.weights_init)
+    model.apply(gimli_v2.weights_init)
     
     start_epoch = 1
     progress_bar = trange(start_epoch, args.epochs + 1)
@@ -265,8 +277,8 @@ if __name__ == '__main__':
                         help='how many batches to wait before logging training status')
     # parser.add_argument('--resume', type=str,
     #                     help='resume from model stored')
-    # parser.add_argument('--clevr-dir', type=str, default='.',
-    #                     help='base directory of CLEVR dataset')
+    parser.add_argument('--data-dir', type=str, default='../',
+                        help='base directory of CSS3D dataset containing .npy file and /images/ directory')
     # parser.add_argument('--model', type=str, default='original-fp',
     #                     help='which model is used to train the network')
     # parser.add_argument('--no-invert-questions', action='store_true', default=False,
@@ -283,6 +295,8 @@ if __name__ == '__main__':
                         help='number of epochs before lr update')
     parser.add_argument('--loss', type=str, default='mse',
                         help='use log-likelihood loss function (default: mean squared error)')
+    parser.add_argument('--from-epoch', type=int, default=0,
+                        help='when using a pre-trained model')
     # parser.add_argument('--bs-max', type=int, default=-1,
     #                     help='max batch-size')
     # parser.add_argument('--bs-gamma', type=float, default=1, 

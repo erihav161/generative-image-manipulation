@@ -18,10 +18,7 @@ import numpy as np
 import PIL
 # import skimage.io
 import torch
-import json
 import torch.utils.data
-import torchvision
-import warnings
 import random
 
 

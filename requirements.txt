@@ -1,0 +1,9 @@
+numpy==1.24.1
+Pillow==9.4.0
+sentence-transformers==2.2.2
+tensorboard==2.12.0
+tensorboard-data-server==0.7.0
+tensorboard-plugin-wit==1.8.1
+torch==1.13.1
+torchvision==0.14.1
+tqdm==4.64.1
