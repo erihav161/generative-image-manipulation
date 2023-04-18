@@ -7,8 +7,8 @@ Using
 - [x] pytorch
 
 ## Instructions
-Make sure the python files are in the same directory, preferably in a subdirectory to the dataset (otherwise, specify path to dataset in command line);\n
-  - working_directory (dir)
+Make sure the python files are in the same directory, preferably in a subdirectory to the dataset (otherwise, specify path to dataset in command line);
+  - working directory (dir)
     - scripts (dir)
         - train.py
         - gimli_v2.py
@@ -19,28 +19,40 @@ Make sure the python files are in the same directory, preferably in a subdirecto
     - css-actions.dup.npy (file)
 
 **Train generator**
+
 Run the training loop with arguments
-  'python train.py'
+  `python train.py`
 to train gimli_v2 with default arguments.
+
 Use arguments:
-- '--batch-size=', default is 32
-- '--epochs=', default is 350
-- '--data-dir=', default is '../'
+- `--batch-size=`, default is 32
+- `--epochs=`, default is 350
+- `--data-dir=`, default is '../'
+
 Use
-  'nohup python train.py --batch-size.... > ./output.log 2>&1&'
+
+  `nohup python train.py --batch-size.... > ./output.log 2>&1&`
+  
 to run as background process
 
+
 **Train in GAN setting**
+
 Run the training loop with arguments
-  'python trainDCGAN.py'
+  `python trainDCGAN.py`
 to train gimli_v2 with default arguments.
+
 Use arguments:
-- '--batch-size=', default is 32
-- '--epochs=', default is 350
-- '--data-dir=', default is '../'
+- `--batch-size=`, default is 32
+- `--epochs=`, default is 350
+- `--data-dir=`, default is '../'
+
 Use
-  'nohup python trainDCGAN.py --batch-size.... > ./output.log 2>&1&'
+
+  `nohup python trainDCGAN.py --batch-size.... > ./output.log 2>&1&`
+
 to run as background process
+
 
 
 ## Files:
