@@ -1,7 +1,7 @@
 import argparse
 import sys
 import time
-import GAN_dataset
+import datasets
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 import torch
@@ -21,11 +21,11 @@ import gimli
 writer = SummaryWriter()
 
 
-def load_dataset(): # use load_dataset(opt) if multiple datasets and models are available
+def load_dataset(dir_path): # use load_dataset(opt) if multiple datasets and models are available
     print('\nInitializing dataset!')
     print('\n==> Train data...')
-    trainset = GAN_dataset.CSSDataset(
-        path='../',
+    trainset = datasets.CSSDataset(
+        path=dir_path,
         split='train',
         transform=torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
@@ -34,8 +34,8 @@ def load_dataset(): # use load_dataset(opt) if multiple datasets and models are 
         ])
     )
     print('==> Test data...\n')
-    testset = GAN_dataset.CSSDataset(
-        path='../',
+    testset = datasets.CSSDataset(
+        path=dir_path,
         split='test',
         transform=torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(),
@@ -54,7 +54,7 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
     modelG.train()
     modelD.train()
     
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss()
     l2_loss = nn.MSELoss()
     l1_loss = nn.L1Loss()
     MSE_loss = nn.MSELoss(reduction='none') # for weighted loss
@@ -71,14 +71,13 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         target_img = np.stack([d['target_img_data'] for d in sample_batched])
         target_img = torch.from_numpy(target_img).float()
         target_img = torch.autograd.Variable(target_img).cuda()
-        wrong_img = np.stack([d['wrong_img_data'] for d in sample_batched])
-        wrong_img = torch.from_numpy(wrong_img).float()
-        wrong_img = torch.autograd.Variable(wrong_img).cuda()
+        # wrong_img = np.stack([d['wrong_img_data'] for d in sample_batched])
+        # wrong_img = torch.from_numpy(wrong_img).float()
+        # wrong_img = torch.autograd.Variable(wrong_img).cuda()
         action_list = [str(d['mod']['str']) for d in sample_batched]
         action_embeddings = lang_model.encode(action_list)
         embedding_tensor = torch.from_numpy(action_embeddings)
         
-        b_size = src_img.size(0)
         real_labels = torch.ones(target_img.size(0))
         fake_labels = torch.zeros(target_img.size(0))
         # ======== One sided label smoothing ==========
@@ -95,12 +94,14 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         modelD.zero_grad()
         fake_images, phi, phi_im, phi_s = modelG(src_img, embedding_tensor)
         outputs, _ = modelD(target_img, phi.detach(), phi_im.detach(), phi_s.detach())
+        outputs = outputs.sqeeze()
         real_loss = criterion(outputs, smoothed_real_labels)
+        outputs = outputs.squeeze()
         outputs, _ = modelD(fake_images, phi.detach(), phi_im.detach(), phi_s.detach())
         fake_loss = criterion(outputs, fake_labels)
-        outputs, _ = modelD(wrong_img, phi.detach(), phi_im.detach(), phi_s.detach())
-        wrong_loss = criterion(outputs, fake_labels)
-        d_loss = real_loss + fake_loss + wrong_loss
+        # outputs, _ = modelD(wrong_img, phi.detach(), phi_im.detach(), phi_s.detach())
+        # wrong_loss = criterion(outputs, fake_labels)
+        d_loss = real_loss + fake_loss # + wrong_loss
         d_loss.backward()
         optimizerD.step()
         
@@ -109,7 +110,7 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         modelG.zero_grad()
         fake_images, phi, phi_im, phi_s = modelG(src_img, embedding_tensor)
         outputs, activation_fake = modelD(fake_images, phi.detach(), phi_im.detach(), phi_s.detach())
-        _, activation_real = modelD(target_img, phi.detatct(), phi_im.detach(), phi_s.detach())
+        _, activation_real = modelD(target_img, phi.detach(), phi_im.detach(), phi_s.detach())
         activation_fake = torch.mean(activation_fake, 0)
         activation_real = torch.mean(activation_real, 0)
         
@@ -120,6 +121,7 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         # The third term is L1 distance between the generated and real images, this is helpful for the conditional case
         # because it links the embedding feature vector directly to certain pixel values.
         # ===========================================
+        outputs = outputs.squeeze()
         g_fake_loss = criterion(outputs, real_labels)
         g_l2loss = 10 * l2_loss(activation_fake, activation_real.detach())
         g_l1loss = 10 * l1_loss(fake_images, target_img.detach())
@@ -144,7 +146,7 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
             processed = batch_idx * args.batch_size
             n_samples = len(data) * args.batch_size
             progress = float(processed) / n_samples
-            print('\nTrain Empoch: {} [{}/{} ({_.0%})] Train loss: D{} G{}'.format(epoch, processed, n_samples, progress, avg_Dloss, avg_Gloss))
+            print('\nTrain Epoch: {} [{}/{} ({_.0%})] Train loss: D{} G{}'.format(epoch, processed, n_samples, progress, avg_Dloss, avg_Gloss))
             writer.add_scalar('Loss/Train: Discriminator', avg_Dloss, epoch)
             writer.add_scalar('Loss/Train: Generator', avg_Gloss, epoch)
             avg_Gloss = 0.0
@@ -152,7 +154,7 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
             n_batches = 0
     
     if epoch % 10 == 0:
-        tensor = torch.cat((src_img.cpu().data, target_img.cpu().data, fake_images.cpu().data, wrong_img.cpu().data), 0)
+        tensor = torch.cat((src_img.cpu().data, target_img.cpu().data, fake_images.cpu().data), 0)
         save_image(tensor, 'DCGAN_{}.png'.format(epoch), nrow=args.batch_size, normalize=True, range=(-1, 1))
         
 
@@ -163,7 +165,7 @@ def main(args):
     args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 
-    trainset, testset = load_dataset()
+    trainset, testset = load_dataset(args.data_dir)
     train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True)
     test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle)
 
@@ -240,8 +242,8 @@ if __name__ == '__main__':
                         help='how many batches to wait before logging training status')
     # parser.add_argument('--resume', type=str,
     #                     help='resume from model stored')
-    # parser.add_argument('--clevr-dir', type=str, default='.',
-    #                     help='base directory of CLEVR dataset')
+    parser.add_argument('--data-dir', type=str, default='../',
+                        help='base directory of CSS3D dataset containing .npy file and /images/ directory')
     # parser.add_argument('--model', type=str, default='original-fp',
     #                     help='which model is used to train the network')
     # parser.add_argument('--no-invert-questions', action='store_true', default=False,

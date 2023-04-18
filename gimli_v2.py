@@ -19,8 +19,8 @@ class generator(nn.Module):
         self.mlp_hidden = 256
         self.mlp_nfilters = 32
         self.lstm_bidirectional = True
-        self.height_hidden = 8
-        self.width_hidden = 12
+        self.height_hidden = 4
+        self.width_hidden = 6
         
         
         # Image encoder
@@ -36,8 +36,11 @@ class generator(nn.Module):
             nn.ReLU(True),
             nn.Conv2d(in_channels=256, out_channels=512, kernel_size=4, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(512),
+            nn.ReLU(True),
+            nn.Conv2d(in_channels=512, out_channels=1024, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(1024),
             nn.ReLU(True)
-            # output is 512 x 8 x 12
+            # output is 1024 x 4 x 6
         )
         
         x_coords = torch.linspace(-1, 1, self.width_hidden)
@@ -47,7 +50,7 @@ class generator(nn.Module):
                 
         # Linear transform (y = xA^T + b)
         self.g = nn.Sequential(
-            nn.Linear(1412, self.mlp_hidden),
+            nn.Linear(2436, self.mlp_hidden),
             nn.ReLU(True),
             nn.Linear(self.mlp_hidden, self.mlp_hidden),
             nn.ReLU(True),
@@ -56,8 +59,11 @@ class generator(nn.Module):
         )
         
         # Image decoder
-        self.decoder = nn.Sequential( # input is mlp_nfilters x 8 x 12
-            nn.Conv2d(self.mlp_nfilters, 512, 3, 1, 1),
+        self.decoder = nn.Sequential( # input is mlp_nfilters x 4 x 6
+            nn.Conv2d(self.mlp_nfilters, 1024, 3, 1, 1),
+            nn.BatchNorm2d(1024),
+            nn.ReLU(True),
+            nn.ConvTranspose2d(1024, 512, 4, 2, 1, bias=False),
             nn.BatchNorm2d(512),
             nn.ReLU(True),
             nn.ConvTranspose2d(512, 256, 3, 2, 1, bias=False),
@@ -77,7 +83,6 @@ class generator(nn.Module):
         
         # Image encoder
         phi_im = self.imencoder(x1)
-        print('\nImage embed size: {}\n\n'.format(phi_im.shape))
         batch_size, n_channel, conv_h, conv_w = phi_im.size()
         n_pair = conv_h * conv_w
         # Cast all pairs against each other
@@ -86,7 +91,6 @@ class generator(nn.Module):
         coord_tensor = torch.cat((x_grid, y_grid), dim=1)
         if torch.cuda.is_available():
             coord_tensor = coord_tensor.cuda()
-
         x1 = torch.cat([phi_im, coord_tensor], 1) # (B x 512+2 x 8 x 8)
         x1 = x1.permute(0, 2, 3, 1).view(batch_size, conv_h * conv_w, n_channel+2)
         x_i = torch.unsqueeze(x1, 1) # (B x 1 x 64 x 26)
@@ -105,9 +109,9 @@ class generator(nn.Module):
 
         # Relational module
         phi = torch.cat([x1, x2], 3)
-
-        # Changed n_concat (1284) to 1412)
-        phi = phi.view(batch_size * (n_pair**2), 1412)
+        
+        # Changed n_concat from 1412 to 2436
+        phi = phi.view(batch_size * (n_pair**2), 2436)
         phi = self.g(phi)
         phi = phi.view(batch_size, n_pair**2, n_pair*self.mlp_nfilters).sum(1)
         phi = phi.view(batch_size, self.mlp_nfilters, conv_h, conv_w)
