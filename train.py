@@ -185,9 +185,15 @@ def test(data, model, lang_model, epoch, args):
             loss = F.nll_loss(output, target_img)
         else:
             loss = criterion(output, target_img)
-        
-        avg_loss += loss.data[0]
+            
+        # Store for tracking
         epoch_loss.append(loss.item())
+        
+        # Show progress
+        progress_bar.set_postfix(dict(loss=loss.item()))
+        avg_loss += loss.item()
+        n_batches += 1
+       
         if batch_idx % args.log_interval == 0:
             avg_loss /= n_batches
             processed = batch_idx * args.batch_size
