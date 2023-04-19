@@ -16,7 +16,7 @@ from transformers import BertTokenizer
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm, trange
 import matplotlib.pyplot as plt
-import gimli
+import gimli_v2
 
 writer = SummaryWriter()
 
@@ -169,8 +169,8 @@ def main(args):
     train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True)
     test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle)
 
-    modelG = gimli.generator()
-    modelD = gimli.discriminator()
+    modelG = gimli_v2.generator()
+    modelD = gimli_v2.discriminator()
     print(modelG)
     print(modelD)
     # language_model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -186,8 +186,8 @@ def main(args):
         modelG.cuda()
         modelD.cuda()
     
-    modelG.apply(gimli.weights_init)
-    modelD.apply(gimli.weights_init)
+    modelG.apply(gimli_v2.weights_init)
+    modelD.apply(gimli_v2.weights_init)
     
     start_epoch = 1
     progress_bar = trange(start_epoch, args.epochs + 1)
