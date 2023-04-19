@@ -12,10 +12,8 @@ import torch.utils.data
 import torchvision
 from torchvision.utils import save_image
 from torch.autograd import Variable
-from transformers import BertTokenizer
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm, trange
-import matplotlib.pyplot as plt
 import gimli_v2
 
 writer = SummaryWriter()
