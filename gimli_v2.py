@@ -1,7 +1,6 @@
 import os
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 
 
 conv_hidden = 8
@@ -144,8 +143,11 @@ class discriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(self.ndf*4, self.ndf*8, 4, 2, 1, bias=False),
             nn.BatchNorm2d(self.ndf*8),
-            nn.LeakyReLU(0.2, inplace=True)
-        ) # output is (ndf*8) x 8 x 8
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(in_channels=512, out_channels=1024, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(1024),
+            nn.ReLU(True)
+        ) # output is (ndf*8) x 4 x 6
         
         self.phiencoder = nn.Sequential( # input is (mlp_nfilters) x 8 x 8
             nn.Conv2d(self.mlp_nfilters, self.mlp_nfilters*2, 3, 1, 1),
@@ -156,14 +158,20 @@ class discriminator(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(self.mlp_nfilters*4, self.mlp_nfilters*8, 3, 1, 1),
             nn.BatchNorm2d(self.mlp_nfilters*8),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(self.mlp_nfilters*8, self.mlp_nfilters*16, 3, 1, 1),
+            nn.BatchNorm2d(self.mlp_nfilters*16),
             nn.LeakyReLU(0.2, inplace=True)
-        ) # output is (mlp_nfilters*8) x 8 x 8
+        ) # output is (mlp_nfilters*8) x 4 x 6
         
         self.phiimencoder = nn.Sequential( # input is (ngf*8) x 8 x 8
+            nn.Conv2d(self.ngf*16, self.ngf*8, 3, 1, 1),
+            nn.BatchNorm2d(self.ngf*8),
+            nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(self.ngf*8, self.ndf*8, 3, 1, 1), # (ngf*8) x 8 x 8
             nn.BatchNorm2d(self.ndf*8),
             nn.LeakyReLU(0.2, inplace=True)
-        ) # output is # (ndf*8) x 8 x 8
+        ) # output is # (ndf*8) x 4 x 6
 
         self.phisencoder = nn.Sequential( # input is (2*lstm_hidden) x 1 x 1
             nn.ConvTranspose2d(2*self.lstm_hidden, self.ndf*4, 4, 1, 1, bias=False), # (ndf*8) x 4 x 4
@@ -172,41 +180,27 @@ class discriminator(nn.Module):
             nn.ConvTranspose2d(self.ndf*4, self.ndf*2, 4, 1, 1, bias=False),  # (ndf*8) x 8 x 8
             nn.BatchNorm2d(self.ndf * 2),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.ConvTranspose2d(self.ndf*2, self.ndf*8, 4, (2,4), 0, bias=False),
+            nn.ConvTranspose2d(self.ndf*2, self.ndf*8, 4, (1,2), 1, bias=False),
             nn.BatchNorm2d(self.ndf*8),
             nn.LeakyReLU(0.2, inplace=True)
-        ) # output is # (ndf*8) x 8 x 8
+        ) # output is # (ndf*8) x 4 x 6
 
-        self.classifier = nn.Sequential( #input is (n_filt*8) x 8 x 8
-            nn.Conv2d(self.n_filt*8, self.ndf*8, 4, 2, 1, bias=False),
+        self.classifier = nn.Sequential( #input is (n_filt*8) x 4 x 6
+            nn.Conv2d(2560, self.ndf*8, 4, 2, 1, bias=False),
             nn.BatchNorm2d(self.ndf*8),
             nn.LeakyReLU(0.2, inplace=True),
-            nn.Conv2d(self.ndf*8, 1, 4, (1,3), 0, bias=False),
+            nn.Conv2d(self.ndf*8, 1, 4, (1,3), 1, bias=False),
             nn.Sigmoid()
         )
     
     def forward(self, x1, phi, phi_im, phi_s):
         
-        print('\nSize of x1: ', x1.shape)
-        print('\nSize of phi: ', phi.shape)
-        print('\nSize of phi_im: ', phi_im.shape)
-        print('\nSize of phi_s: ', phi_s.shape)
-        
         x1_embed = self.imencoder(x1)
         phi_embed = self.phiencoder(phi)
         phi_im_embed = self.phiimencoder(phi_im)
         phi_s_embed = self.phisencoder(phi_s)
-        print('\n\nTensor sizes:')
-        print('\tx1_embed ', x1_embed.shape)
-        print('\tphi_embed ', phi_embed.shape)
-        print('\tphi_im_embed ', phi_im_embed.shape)
-        print('\tphi_s_embed ', phi_s_embed.shape)
         x = torch.cat([x1_embed, phi_embed, phi_im_embed, phi_s_embed], 1)
-        print('\tx cat: ', x.shape)
         x = self.classifier(x)
-        print('\tx: ', x.shape)
-        print('\n\n')
-        
         
         return x, x1_embed
     

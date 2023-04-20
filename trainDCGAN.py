@@ -1,13 +1,10 @@
 import argparse
-import sys
-import time
 import datasets
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import clip_grad_norm_
 import torch.utils.data
 import torchvision
 from torchvision.utils import save_image
@@ -65,10 +62,14 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         assert type(sample_batched) is list
         src_img = np.stack([d['source_img_data'] for d in sample_batched])
         src_img = torch.from_numpy(src_img).float()
-        src_img = torch.autograd.Variable(src_img).cuda()
         target_img = np.stack([d['target_img_data'] for d in sample_batched])
         target_img = torch.from_numpy(target_img).float()
-        target_img = torch.autograd.Variable(target_img).cuda()
+        if args.cuda:
+            src_img = torch.autograd.Variable(src_img).cuda()
+            target_img = torch.autograd.Variable(target_img).cuda()
+        else:
+            src_img = torch.autograd.Variable(src_img).cpu()
+            target_img = torch.autograd.Variable(target_img).cpu()
         # wrong_img = np.stack([d['wrong_img_data'] for d in sample_batched])
         # wrong_img = torch.from_numpy(wrong_img).float()
         # wrong_img = torch.autograd.Variable(wrong_img).cuda()
@@ -83,19 +84,24 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         # generator adding penalty when the discriminator is too confident
         # =============================================
         smoothed_real_labels = torch.FloatTensor(real_labels.numpy() - 0.1)
-        real_labels = Variable(real_labels).cuda()
-        smoothed_real_labels = Variable(smoothed_real_labels).cuda()
-        fake_labels = Variable(fake_labels).cuda()
+        if args.cuda:
+            real_labels = Variable(real_labels).cuda()
+            smoothed_real_labels = Variable(smoothed_real_labels).cuda()
+            fake_labels = Variable(fake_labels).cuda()
+        else:
+            real_labels = Variable(real_labels).cpu()
+            smoothed_real_labels = Variable(smoothed_real_labels).cpu()
+            fake_labels = Variable(fake_labels).cpu()
         
         
         # Train the discriminator
         modelD.zero_grad()
         fake_images, phi, phi_im, phi_s = modelG(src_img, embedding_tensor)
         outputs, _ = modelD(target_img, phi.detach(), phi_im.detach(), phi_s.detach())
-        outputs = outputs.sqeeze()
+        outputs = torch.squeeze(outputs, dim=(1,2,3))
         real_loss = criterion(outputs, smoothed_real_labels)
-        outputs = outputs.squeeze()
         outputs, _ = modelD(fake_images, phi.detach(), phi_im.detach(), phi_s.detach())
+        outputs = torch.squeeze(outputs, dim=(1,2,3))
         fake_loss = criterion(outputs, fake_labels)
         # outputs, _ = modelD(wrong_img, phi.detach(), phi_im.detach(), phi_s.detach())
         # wrong_loss = criterion(outputs, fake_labels)
@@ -119,13 +125,16 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         # The third term is L1 distance between the generated and real images, this is helpful for the conditional case
         # because it links the embedding feature vector directly to certain pixel values.
         # ===========================================
-        outputs = outputs.squeeze()
+        outputs = torch.squeeze(outputs, dim=(1,2,3))
         g_fake_loss = criterion(outputs, real_labels)
         g_l2loss = 10 * l2_loss(activation_fake, activation_real.detach())
         g_l1loss = 10 * l1_loss(fake_images, target_img.detach())
         g_MSEloss = MSE_loss(src_img, target_img.detach())
         weight = ((src_img - target_img)**2)*1000
-        weight = weight.type(torch.FloatTensor).cuda()
+        if args.cuda:
+            weight = weight.type(torch.FloatTensor).cuda()
+        else:
+            weight = weight.type(torch.FloatTensor).cpu()
         g_MSEloss = g_MSEloss*100
         g_MSEloss = g_MSEloss.mean()
         g_loss = g_fake_loss + g_l2loss + g_l1loss + g_MSEloss
@@ -144,7 +153,7 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
             processed = batch_idx * args.batch_size
             n_samples = len(data) * args.batch_size
             progress = float(processed) / n_samples
-            print('\nTrain Epoch: {} [{}/{} ({_.0%})] Train loss: D{} G{}'.format(epoch, processed, n_samples, progress, avg_Dloss, avg_Gloss))
+            print('\nTrain Epoch: {} [{}/{} ({:.0%})] Train loss: D{} G{}'.format(epoch, processed, n_samples, progress, avg_Dloss, avg_Gloss))
             writer.add_scalar('Loss/Train: Discriminator', avg_Dloss, epoch)
             writer.add_scalar('Loss/Train: Generator', avg_Gloss, epoch)
             avg_Gloss = 0.0
