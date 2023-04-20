@@ -186,14 +186,16 @@ def test(data, model, lang_model, epoch, args):
         else:
             loss = criterion(output, target_img)
         
-        avg_loss += loss.data[0]
-        epoch_loss.append(loss.item())
+        progress_bar.set_postfix(dict(loss=loss.item()))
+        avg_loss += loss.item()
+        n_batches += 1
+        
         if batch_idx % args.log_interval == 0:
             avg_loss /= n_batches
             processed = batch_idx * args.batch_size
             n_samples = len(data) * args.batch_size
             progress = float(processed) / n_samples
-            print('\nTrain Epoch: {} [{}/{} ({:.0%})] Train loss: {}'.format(
+            print('\nTest Epoch: {} [{}/{} ({:.0%})] Test loss: {}'.format(
                 epoch, processed, n_samples, progress, avg_loss))
             
         
@@ -211,8 +213,8 @@ def main(args):
 
 
     trainset, testset = load_dataset(args.data_dir)
-    train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True)
-    test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle)
+    train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle, num_workers=args.num_workers)
 
     model = gimli_v2.generator()
     print(model)
@@ -261,6 +263,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch Relational-Network CLEVR')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                         help='input batch size for training (default: 32)')
+    parser.add_argument('--num-workers', type=int, default=0, metavar='N',
+                        help='number of workers in data loader (default: 0)')
     # .add_argument('--test-batch-size', type=int, default=640,
     #                     help='input batch size for training (default: 640)')
     parser.add_argument('--epochs', type=int, default=350, metavar='N',

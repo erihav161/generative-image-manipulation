@@ -1,3 +1,4 @@
+import os
 import argparse
 import datasets
 import numpy as np
@@ -166,6 +167,9 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         
 
 def main(args):
+    # Supress warning tokenizer warning
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    
     # Define parameters
     workers = 0
     batch_shuffle = True
@@ -173,7 +177,7 @@ def main(args):
 
 
     trainset, testset = load_dataset(args.data_dir)
-    train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True)
+    train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle)
 
     modelG = gimli_v2.generator()
@@ -233,6 +237,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch Relational-Network CLEVR')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                         help='input batch size for training (default: 32)')
+    parser.add_argument('--num-workers', type=int, default=0, metavar='N',
+                        help='number of workers in data loader (default: 0)')
     # .add_argument('--test-batch-size', type=int, default=640,
     #                     help='input batch size for training (default: 640)')
     parser.add_argument('--epochs', type=int, default=350, metavar='N',
