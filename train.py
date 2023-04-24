@@ -18,6 +18,8 @@
 
 #!/usr/bin/python
 
+import os
+import re
 import argparse
 import datasets
 import numpy as np
@@ -216,7 +218,23 @@ def main(args):
     train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle, num_workers=args.num_workers)
 
-    model = gimli_v2.generator()
+    start_epoch = 1
+    if args.resume:
+        filename = args.resume
+        if os.path.isfile(filename):
+            print('\t==> loading checkpoint {}...'.format(filename))
+            if args.cuda:
+                checkpoint = torch.load(filename)
+            else:
+                checkpoint = torch.load(filename, map_location=torch.device('cpu'))
+                
+            model = checkpoint
+            print('\t==> loaded checkpoint {}\n'.format(filename))
+        
+        start_epoch = int(re.match(r'.*epoch_(\d+).pth', args.resume).groups()[0]) + 1
+        print('\nFinished loading checkpoints. Starting from epoch {}\n\n!'.format(start_epoch))
+    else:
+        model = gimli_v2.generator()
     print(model)
     # language_model = SentenceTransformer('all-MiniLM-L6-v2')
     language_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
@@ -228,9 +246,9 @@ def main(args):
     if args.cuda:
         model.cuda()
     
-    model.apply(gimli_v2.weights_init)
+    if not args.resume:
+        model.apply(gimli_v2.weights_init)
     
-    start_epoch = 1
     progress_bar = trange(start_epoch, args.epochs + 1)
     
     optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=1e-5)
@@ -279,8 +297,8 @@ if __name__ == '__main__':
     #                     help='random seed (default: 42)')
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
-    # parser.add_argument('--resume', type=str,
-    #                     help='resume from model stored')
+    parser.add_argument('--resume', type=str,
+                        help='resume from model stored')
     parser.add_argument('--data-dir', type=str, default='../',
                         help='base directory of CSS3D dataset containing .npy file and /images/ directory')
     # parser.add_argument('--model', type=str, default='original-fp',

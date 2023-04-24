@@ -1,5 +1,6 @@
 import os
 import argparse
+import re
 import datasets
 import numpy as np
 from torch.utils.tensorboard import SummaryWriter
@@ -180,12 +181,48 @@ def main(args):
     train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle)
 
-    modelG = gimli_v2.generator()
-    modelD = gimli_v2.discriminator()
-    print(modelG)
-    print(modelD)
     # language_model = SentenceTransformer('all-MiniLM-L6-v2')
     language_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+    
+    
+    start_epoch = 1
+    if args.resume:
+        filenames = args.resume.split()
+        for filename in filenames:
+            if os.path.isfile(filename):
+                print('\t==> loading checkpoint {}...'.format(filename))
+                if args.cuda:
+                    checkpoint = torch.load(filename)
+                else:
+                    checkpoint = torch.load(filename, map_location=torch.device('cpu'))
+                    
+                
+                # # removes 'module' from dict entries, pytorch bug
+                # if torch.cuda.device_count() == 1 and any(k.startswith('module.') for k in checkpoint.keys()):
+                #     checkpoint = {k.replace('module.',''): v for k,v in checkpoint.items()}
+                # if torch.cuda.device_count() > 1 and not any(k.startswith('module.') for k in checkpoint.keys()):
+                #     checkpoint = {'module.'+k: v for k,v in checkpoint.items()}
+                
+                # load correct model in right place
+                if 'modelG' in filename:
+                    # modelG.load_state_dict(checkpoint.state_dict())
+                    modelG = checkpoint
+                elif 'modelD' in filename:
+                    # modelD.load_state_dict(checkpoint)
+                    modelD = checkpoint
+                else:
+                    print('Wrong model files')
+                    return
+                
+                print('\t==> loaded checkpoint {}\n'.format(filename))
+        
+        start_epoch = int(re.match(r'.*epoch_(\d+).pth', args.resume).groups()[0]) + 1
+        print('\nFinished loading checkpoints. Starting from epoch {}\n\n!'.format(start_epoch))
+    else:
+        modelG = gimli_v2.generator()
+        modelD = gimli_v2.discriminator()
+        print(modelG)
+        print(modelD)
     
     if torch.cuda.device_count() > 0 and args.cuda:
         modelG = torch.nn.DataParallel(modelG)
@@ -197,10 +234,10 @@ def main(args):
         modelG.cuda()
         modelD.cuda()
     
-    modelG.apply(gimli_v2.weights_init)
-    modelD.apply(gimli_v2.weights_init)
-    
-    start_epoch = 1
+    if not args.resume:
+        modelG.apply(gimli_v2.weights_init)
+        modelD.apply(gimli_v2.weights_init)
+                
     progress_bar = trange(start_epoch, args.epochs + 1)
     
     optimizerG = torch.optim.Adamax(modelG.parameters(), lr=args.lr, weight_decay=1e-5)
@@ -253,8 +290,8 @@ if __name__ == '__main__':
     #                     help='random seed (default: 42)')
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
-    # parser.add_argument('--resume', type=str,
-    #                     help='resume from model stored')
+    parser.add_argument('--resume', type=str,
+                        help='resume from model stored. modelG first, separate with blank space')
     parser.add_argument('--data-dir', type=str, default='../',
                         help='base directory of CSS3D dataset containing .npy file and /images/ directory')
     # parser.add_argument('--model', type=str, default='original-fp',
