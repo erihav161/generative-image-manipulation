@@ -187,6 +187,7 @@ def test(data, model, lang_model, epoch, args):
             loss = F.nll_loss(output, target_img)
         else:
             loss = criterion(output, target_img)
+
         
         progress_bar.set_postfix(dict(loss=loss.item()))
         avg_loss += loss.item()
