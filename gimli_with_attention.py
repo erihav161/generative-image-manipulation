@@ -1,7 +1,7 @@
-import os
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
+import torch.nn.functional as F
+import math
 
 
 conv_hidden = 8
@@ -16,11 +16,14 @@ class generator(nn.Module):
         super(generator, self).__init__()
         
         self.num_channels = 3
-        self.mlp_hidden = 256
+        self.attn_hidden = 514
         self.mlp_nfilters = 32
-        self.lstm_bidirectional = True
         self.height_hidden = 8
         self.width_hidden = 12
+        self.num_filters = 512
+        self.s_dim = 384
+        self.hidden_size = 512
+        self.num_heads = 16
         
         
         # Image encoder
@@ -34,8 +37,8 @@ class generator(nn.Module):
             nn.Conv2d(in_channels=128, out_channels=256, kernel_size=4, stride=2, padding=3, bias=False), # changed to p=3 
             nn.BatchNorm2d(256),
             nn.ReLU(True),
-            nn.Conv2d(in_channels=256, out_channels=512, kernel_size=4, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(512),
+            nn.Conv2d(in_channels=256, out_channels=self.num_filters, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(self.num_filters),
             nn.ReLU(True)
             # output is 512 x 8 x 12
         )
@@ -44,16 +47,17 @@ class generator(nn.Module):
         y_coords = torch.linspace(-1, 1, self.height_hidden)
         self.x_grid, self.y_grid = torch.meshgrid(x_coords, y_coords)
         
-                
-        # Linear transform (y = xA^T + b)
-        self.g = nn.Sequential(
-            nn.Linear(1412, self.mlp_hidden),
-            nn.ReLU(True),
-            nn.Linear(self.mlp_hidden, self.mlp_hidden),
-            nn.ReLU(True),
-            nn.Linear(self.mlp_hidden, self.height_hidden * self.width_hidden * self.mlp_nfilters),
-            nn.ReLU(True)
-        )
+        # Attention module
+        self.image_query = nn.Linear(in_features=self.attn_hidden, out_features=self.s_dim)
+        self.image_key = nn.Linear(in_features=self.attn_hidden, out_features=self.s_dim)
+        self.image_value = nn.Linear(in_features=self.attn_hidden, out_features=self.s_dim)
+        
+        self.instruction_query = nn.Linear(in_features=self.s_dim, out_features=self.s_dim)
+        self.instruction_key = nn.Linear(in_features=self.s_dim, out_features=self.s_dim)
+        self.instruction_value = nn.Linear(in_features=self.s_dim, out_features=self.s_dim)
+        
+        self.linear_out = nn.Linear(self.s_dim+4, 32)
+        
         
         # Image decoder
         self.decoder = nn.Sequential( # input is mlp_nfilters x 8 x 12
@@ -72,44 +76,55 @@ class generator(nn.Module):
             nn.ConvTranspose2d(64, self.num_channels, 4, 2, (1, 3), bias=False),
             nn.Tanh()
         )
-        
+            
     def forward(self, x1, sen_embed):
         
         # Image encoder
         phi_im = self.imencoder(x1)
-        batch_size, n_channel, conv_h, conv_w = phi_im.size()
+        batch_size, num_channels, conv_h, conv_w = phi_im.size()
         n_pair = conv_h * conv_w
-        # Cast all pairs against each other
         x_grid = self.x_grid.reshape(1, 1, conv_h, conv_w).repeat(batch_size, 1, 1, 1)
         y_grid = self.y_grid.reshape(1, 1, conv_h, conv_w).repeat(batch_size, 1, 1, 1)
         coord_tensor = torch.cat((x_grid, y_grid), dim=1)
         if torch.cuda.is_available():
             coord_tensor = coord_tensor.cuda()
+        phi_im = torch.cat([phi_im, coord_tensor], dim=1)
+        phi_im = phi_im.view(batch_size, n_pair, num_channels+2)
 
-        x1 = torch.cat([phi_im, coord_tensor], 1) # (B x 512+2 x 8 x 8)
-        x1 = x1.permute(0, 2, 3, 1).view(batch_size, conv_h * conv_w, n_channel+2)
-        x_i = torch.unsqueeze(x1, 1) # (B x 1 x 64 x 26)
-        x_i = x_i.repeat(1, n_pair, 1, 1) # (B x 64 x 64 x 26)
-        x_j = torch.unsqueeze(x1, 2) # (B x 64 x 1 x 26)
-        x_j = x_j.repeat(1, 1, n_pair, 1) # (B x 64 x 64 x 2*26)
-        x1 = torch.cat([x_i, x_j], 3)
-
-        x2 = sen_embed
-        phi_s = torch.unsqueeze(x2, 2)
-        phi_s = torch.unsqueeze(phi_s, 3)
-        x2 = torch.unsqueeze(x2, 1)
-        x2 = x2.repeat(1, n_pair, 1)
-        x2 = torch.unsqueeze(x2, 2)
-        x2 = x2.repeat(1, 1, n_pair, 1)
-
-        # Relational module
-        phi = torch.cat([x1, x2], 3)
-
-        # Changed n_concat (1284) to 1412)
-        phi = phi.view(batch_size * (n_pair**2), 1412)
-        phi = self.g(phi)
-        phi = phi.view(batch_size, n_pair**2, n_pair*self.mlp_nfilters).sum(1)
-        phi = phi.view(batch_size, self.mlp_nfilters, conv_h, conv_w)
+        # Sentence embedding
+        phi_s = sen_embed.view(-1, sen_embed.shape[-1])
+        
+        # Attention module
+        im_query = self.image_query(phi_im)
+        im_key = self.image_key(phi_im)
+        im_value = self.image_value(phi_im)
+        
+        sen_query = self.instruction_query(phi_s)
+        sen_key = self.instruction_key(phi_s)
+        sen_value = self.instruction_value(phi_s)
+        # Reshape tensors
+        seq_len = im_query.size(1)
+        im_query = im_query.view(batch_size, self.s_dim, -1)
+        im_key = im_key.view(batch_size, self.s_dim, -1)
+        im_value = im_value.view(batch_size, self.s_dim, -1)
+        seq_len = sen_query.size(1)
+        sen_query = sen_query.view(batch_size, seq_len, -1)
+        sen_key = sen_key.view(batch_size, seq_len, -1)
+        sen_value = sen_value.view(batch_size, seq_len, -1)
+        # Compute scores
+        im_scores = torch.matmul(im_query, im_key.transpose(1,2))
+        sen_scores = torch.matmul(sen_query, sen_key.transpose(1,2))
+        # normalize to get weights
+        im_weights = im_scores / ((self.s_dim // self.num_heads)**0.5)
+        sen_weights = sen_scores / ((self.s_dim // self.num_heads)**0.5)
+        # Compute output
+        im_out = torch.matmul(im_weights, im_value)
+        sen_out = torch.matmul(sen_weights, sen_value)
+        # Conncatenate tensors
+        phi = torch.cat([im_out, sen_out], dim=2)
+        phi = phi.view(batch_size, -1, 8, 12)
+        # Transform multi-head attention
+        phi = self.linear_out(phi.transpose(1,3)).view(batch_size, self.mlp_nfilters, conv_h, conv_w)
         
         # Decoder
         x = self.decoder(phi)
@@ -213,27 +228,3 @@ def weights_init(m):
     elif classname.find('BatchNorm') != -1:
         nn.init.normal_(m.weight.data, 1.0, 0.02)
         nn.init.constant_(m.bias.data, 0)
-    
-
-def double_conv(in_channels, out_channels):
-    return nn.Sequential(
-        nn.Conv2d(in_channels, out_channels, 3, padding=1),
-        nn.BatchNorm2d(out_channels),
-        nn.LeakyReLU(0.2, inplace=True),
-        nn.Conv2d(out_channels, out_channels, 3, padding=1),
-        nn.BatchNorm2d(out_channels),
-        nn.LeakyReLU(0.2, inplace=True)
-    )
-    
-# MLP for g in RN for generator and discriminator
-def g(n_concat):
-    return nn.Sequential(
-        nn.Linear(n_concat, mlp_hidden),
-        nn.LeakyReLU(0.2, inplace=True),
-        nn.Linear(mlp_hidden, mlp_hidden),
-        nn.LeakyReLU(0.2, inplace=True),
-        nn.Linear(mlp_hidden, conv_hidden * conv_hidden * mlp_nfilters),
-        nn.LeakyReLU(0.2, inplace=True)
-    )
-    
-    
