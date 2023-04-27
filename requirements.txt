@@ -1,5 +1,7 @@
 numpy==1.24.1
+pickleshare==0.7.5
 Pillow==9.4.0
+pyparsing==3.0.9
 regex==2022.10.31
 sentence-transformers==2.2.2
 tensorboard==2.12.0

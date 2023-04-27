@@ -23,6 +23,7 @@ import re
 import argparse
 import datasets
 import numpy as np
+from time import time
 from torch.utils.tensorboard import SummaryWriter
 import torch
 import torch.nn as nn
@@ -33,7 +34,10 @@ import torchvision
 from torchvision.utils import save_image
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm, trange
+import gimli
 import gimli_v2
+import gimli_with_attention
+from pickle import dump
 
 writer = SummaryWriter()
 
@@ -65,7 +69,7 @@ def load_dataset(dir_path):
     
     return trainset, testset
 
-def train(data, model, lang_model, optimizer, epoch, args):
+def train(data, model, lang_model, optimizer, epoch, args, loss_dict):
     model.train()
     
 
@@ -147,15 +151,16 @@ def train(data, model, lang_model, optimizer, epoch, args):
             n_batches = 0
     
         
-    if epoch % 10 == 0:
+    if epoch % 50 == 0:
             tensor = torch.cat((src_img.cpu().data, target_img.cpu().data, output.cpu().data), 0)
-            save_image(tensor, './dc_img/modelG_{}.png'.format(epoch), nrow=args.batch_size, normalize=True, range=(-1, 1))
+            save_image(tensor, './dc_img/modelG_attention_{}.png'.format(epoch), nrow=args.batch_size, normalize=True, range=(-1, 1))
     
     loss_value = sum(epoch_loss)/len(epoch_loss)
     writer.add_scalar('Loss/train', loss_value, epoch)
+    loss_dict[epoch] = loss_value
     
     
-def test(data, model, lang_model, epoch, args):
+def test(data, model, lang_model, epoch, args, loss_dict):
     model.eval()
 
     if args.loss == 'mse':
@@ -191,6 +196,7 @@ def test(data, model, lang_model, epoch, args):
         
         progress_bar.set_postfix(dict(loss=loss.item()))
         avg_loss += loss.item()
+        epoch_loss.append(loss.item())
         n_batches += 1
         
         if batch_idx % args.log_interval == 0:
@@ -202,15 +208,17 @@ def test(data, model, lang_model, epoch, args):
                 epoch, processed, n_samples, progress, avg_loss))
             
         
-        avg_loss /= len(data)
-        writer.add_scalar('Loss/test', avg_loss, epoch)
-
-
+    avg_loss /= len(data)
+    writer.add_scalar('Loss/test', avg_loss, epoch)
+    # Store epoch avg loss
+    loss_value = sum(epoch_loss)/len(epoch_loss)
+    loss_dict[epoch] = loss_value
 
 
 def main(args):
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
     # Define parameters
-    workers = 0
     batch_shuffle = True
     args.cuda = not args.no_cuda and torch.cuda.is_available()
 
@@ -235,8 +243,14 @@ def main(args):
         start_epoch = int(re.match(r'.*epoch_(\d+).pth', args.resume).groups()[0]) + 1
         print('\nFinished loading checkpoints. Starting from epoch {}\n\n!'.format(start_epoch))
     else:
-        model = gimli_v2.generator()
-    print(model)
+        if 'original' in args.model.lower():
+            model = gimli.generator()
+        elif 'v2' in args.model.lower():
+            model = gimli_v2.generator()
+        elif 'attention' in args.model.lower():
+            model = gimli_with_attention.generator()
+    
+    # print(model)
     # language_model = SentenceTransformer('all-MiniLM-L6-v2')
     language_model = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
     
@@ -255,6 +269,9 @@ def main(args):
     optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_step, gamma=args.lr_gamma)
     scheduler.last_epoch = start_epoch
+    train_loss = {}
+    test_loss = {}
+    start_time = time()
     print('\nTraining ({} epochs) is starting...'.format(args.epochs))
     for epoch in progress_bar:
         
@@ -262,19 +279,27 @@ def main(args):
 
         # TRAIN
         progress_bar.set_description('TRAIN')
-        train(train_loader, model, language_model, optimizer, epoch, args)
+        train(train_loader, model, language_model, optimizer, epoch, args, train_loss)
 
     
         # TEST
         progress_bar.set_description('TEST')
-        test(test_loader, model, language_model, epoch, args)
+        test(test_loader, model, language_model, epoch, args, test_loss)
 
 
         if epoch % 10 == 0:
-            torch.save(model, './modelG_epoch_{}.pth'.format(epoch))
-                    
-        
+            torch.save(model, './model_{}_epoch_{}.pth'.format(args.model, epoch))
+    
+    total_time = time() - start_time
+    print('\nTotal time taken:\n\t{}\n'.format(total_time))
+    writer.add_scalar('Total time', total_time)
     writer.flush()
+    # Store training loss
+    with open('./train_loss.pkl', 'wb') as file:
+        dump(train_loss, file)
+    # Store testing loss
+    with open('./test_loss.pkl', 'wb') as file:
+        dump(test_loss, file)
     # writer.close()
 
 if __name__ == '__main__':
@@ -302,8 +327,8 @@ if __name__ == '__main__':
                         help='resume from model stored')
     parser.add_argument('--data-dir', type=str, default='../',
                         help='base directory of CSS3D dataset containing .npy file and /images/ directory')
-    # parser.add_argument('--model', type=str, default='original-fp',
-    #                     help='which model is used to train the network')
+    parser.add_argument('--model', type=str, default='original-fp',
+                        help='which model is used to train the network')
     # parser.add_argument('--no-invert-questions', action='store_true', default=False,
     #                     help='invert the question word indexes for LSTM processing')
     # parser.add_argument('--test', action='store_true', default=False,

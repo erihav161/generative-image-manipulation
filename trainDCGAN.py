@@ -3,6 +3,7 @@ import argparse
 import re
 import datasets
 import numpy as np
+from time import time
 from torch.utils.tensorboard import SummaryWriter
 import torch
 import torch.nn as nn
@@ -13,7 +14,10 @@ from torchvision.utils import save_image
 from torch.autograd import Variable
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm, trange
+import gimli
 import gimli_v2
+import gimli_with_attention
+from pickle import dump
 
 writer = SummaryWriter()
 
@@ -47,7 +51,7 @@ def load_dataset(dir_path): # use load_dataset(opt) if multiple datasets and mod
     return trainset, testset
 
 
-def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args):
+def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args, g_loss_dict, d_loss_dict):
     modelG.train()
     modelD.train()
     
@@ -57,6 +61,8 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
     MSE_loss = nn.MSELoss(reduction='none') # for weighted loss
     avg_Dloss = 0.0
     avg_Gloss = 0.0
+    epoch_dloss = []
+    epoch_gloss = []
     n_batches = 0
     progress_bar = tqdm(data)
     for batch_idx, sample_batched in enumerate(progress_bar):
@@ -147,6 +153,8 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
         progress_bar.set_postfix(dict(loss=d_loss.item()))
         avg_Dloss += d_loss.item()
         avg_Gloss += g_loss.item()
+        epoch_dloss.append(d_loss.item())
+        epoch_gloss.append(g_loss.item())
         n_batches += 1
         
         if batch_idx % args.log_interval == 0:
@@ -162,10 +170,12 @@ def train(data, modelG, modelD, lang_model, optimizerG, optimizerD, epoch, args)
             avg_Dloss = 0.0
             n_batches = 0
     
-    if epoch % 10 == 0:
+    if epoch % 50 == 0:
         tensor = torch.cat((src_img.cpu().data, target_img.cpu().data, fake_images.cpu().data), 0)
         save_image(tensor, 'DCGAN_{}.png'.format(epoch), nrow=args.batch_size, normalize=True, range=(-1, 1))
-        
+    # Store loss values
+    g_loss_dict[epoch] = sum(epoch_gloss) / len(epoch_gloss)
+    d_loss_dict[epoch] = sum(epoch_dloss) / len(epoch_dloss)
 
 def main(args):
     # Supress warning tokenizer warning
@@ -219,10 +229,17 @@ def main(args):
         start_epoch = int(re.match(r'.*epoch_(\d+).pth', args.resume).groups()[0]) + 1
         print('\nFinished loading checkpoints. Starting from epoch {}\n\n!'.format(start_epoch))
     else:
-        modelG = gimli_v2.generator()
-        modelD = gimli_v2.discriminator()
-        print(modelG)
-        print(modelD)
+        if 'original' in args.model.lower():
+            modelG = gimli.generator()
+            modelD = gimli.discriminator()
+        elif 'v2' in args.model.lower():
+            modelG = gimli_v2.generator()
+            modelD = gimli_v2.discriminator()
+        elif 'attention' in args.model.lower():
+            modelG = gimli_with_attention.generator()
+            modelD = gimli_with_attention.discriminator()
+        # print(modelG)
+        # print(modelD)
     
     if torch.cuda.device_count() > 0 and args.cuda:
         modelG = torch.nn.DataParallel(modelG)
@@ -246,6 +263,9 @@ def main(args):
     schedulerG.last_epoch = start_epoch
     schedulerD = torch.optim.lr_scheduler.StepLR(optimizerD, args.lr_step, gamma=args.lr_gamma)
     schedulerD.last_epoch = start_epoch
+    g_loss_dict = {}
+    d_loss_dict = {}
+    start_time = time()
     print('\nTraining ({} epochs) is starting...'.format(args.epochs))
     for epoch in progress_bar:
         
@@ -253,7 +273,7 @@ def main(args):
 
         # TRAIN
         progress_bar.set_description('TRAIN')
-        train(train_loader, modelG, modelD, language_model, optimizerG, optimizerD, epoch, args)
+        train(train_loader, modelG, modelD, language_model, optimizerG, optimizerD, epoch, args, g_loss_dict, d_loss_dict)
 
     
         # # TEST
@@ -262,10 +282,15 @@ def main(args):
 
 
         if epoch % 10 == 0:
-            torch.save(modelG, './modelGgan_epoch_{}.pth'.format(epoch))
-            torch.save(modelD, './modelDgan_epoch_{}.pth'.format(epoch))
+            torch.save(modelG, './modelG_epoch_{}.pth'.format(epoch))
+            torch.save(modelD, './modelD_epoch_{}.pth'.format(epoch))
                     
-        
+    total_time = time() - start_time
+    print('\nTotal time elapsed:\n\t{}\n'.format(total_time))
+    with open('./Generator_train_loss.pkl', 'wb') as file:
+        dump(g_loss_dict, file)
+    with open('./Discriminator_train_loss.pkl', 'wb') as file:
+        dump(d_loss_dict, file)
     writer.flush()
     writer.close()
 
@@ -294,8 +319,8 @@ if __name__ == '__main__':
                         help='resume from model stored. modelG first, separate with blank space')
     parser.add_argument('--data-dir', type=str, default='../',
                         help='base directory of CSS3D dataset containing .npy file and /images/ directory')
-    # parser.add_argument('--model', type=str, default='original-fp',
-    #                     help='which model is used to train the network')
+    parser.add_argument('--model', type=str, default='original-fp',
+                        help='which model is used to train the network')
     # parser.add_argument('--no-invert-questions', action='store_true', default=False,
     #                     help='invert the question word indexes for LSTM processing')
     # parser.add_argument('--test', action='store_true', default=False,
