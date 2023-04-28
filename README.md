@@ -7,6 +7,8 @@ Using
 - [x] pytorch
 
 ## Instructions
+**Dowload dataset** [External website to CSS3D dataset](https://drive.google.com/file/d/1wPqMw-HKmXUG2qTgYBiTNUnjz83hA2tY/view) 
+
 Make sure the python files are in the same directory, preferably in a subdirectory to the dataset (otherwise, specify path to dataset in command line);
   - working directory (dir)
     - scripts (dir)
