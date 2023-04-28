@@ -287,9 +287,9 @@ def main(args):
                     
     total_time = time() - start_time
     print('\nTotal time elapsed:\n\t{}\n'.format(total_time))
-    with open('./Generator_train_loss.pkl', 'wb') as file:
+    with open('./Generator_train_loss_{}_epochs.pkl'.format(args.epochs), 'wb') as file:
         dump(g_loss_dict, file)
-    with open('./Discriminator_train_loss.pkl', 'wb') as file:
+    with open('./Discriminator_train_loss_{}_epochs.pkl'.format(args.epochs), 'wb') as file:
         dump(d_loss_dict, file)
     writer.flush()
     writer.close()

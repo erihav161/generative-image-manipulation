@@ -80,15 +80,15 @@ class generator(nn.Module):
     def forward(self, x1, sen_embed):
         
         # Image encoder
-        phi_im = self.imencoder(x1)
-        batch_size, num_channels, conv_h, conv_w = phi_im.size()
+        phi_im_out = self.imencoder(x1)
+        batch_size, num_channels, conv_h, conv_w = phi_im_out.size()
         n_pair = conv_h * conv_w
         x_grid = self.x_grid.reshape(1, 1, conv_h, conv_w).repeat(batch_size, 1, 1, 1)
         y_grid = self.y_grid.reshape(1, 1, conv_h, conv_w).repeat(batch_size, 1, 1, 1)
         coord_tensor = torch.cat((x_grid, y_grid), dim=1)
         if torch.cuda.is_available():
             coord_tensor = coord_tensor.cuda()
-        phi_im = torch.cat([phi_im, coord_tensor], dim=1)
+        phi_im = torch.cat([phi_im_out, coord_tensor], dim=1)
         phi_im = phi_im.view(batch_size, n_pair, num_channels+2)
 
         # Sentence embedding
@@ -128,6 +128,11 @@ class generator(nn.Module):
         
         # Decoder
         x = self.decoder(phi)
+        
+        # reshape phi_im tensor and phi_s tensor
+        phi_im = phi_im_out.view(batch_size, self.num_filters, conv_h, conv_w)
+        phi_s = phi_s.unsqueeze(dim=2)
+        phi_s = phi_s.unsqueeze(dim=2)
         
         return x, phi, phi_im, phi_s
     
@@ -196,26 +201,13 @@ class discriminator(nn.Module):
         )
     
     def forward(self, x1, phi, phi_im, phi_s):
-        
-        print('\nSize of x1: ', x1.shape)
-        print('\nSize of phi: ', phi.shape)
-        print('\nSize of phi_im: ', phi_im.shape)
-        print('\nSize of phi_s: ', phi_s.shape)
-        
+              
         x1_embed = self.imencoder(x1)
         phi_embed = self.phiencoder(phi)
         phi_im_embed = self.phiimencoder(phi_im)
         phi_s_embed = self.phisencoder(phi_s)
-        print('\n\nTensor sizes:')
-        print('\tx1_embed ', x1_embed.shape)
-        print('\tphi_embed ', phi_embed.shape)
-        print('\tphi_im_embed ', phi_im_embed.shape)
-        print('\tphi_s_embed ', phi_s_embed.shape)
         x = torch.cat([x1_embed, phi_embed, phi_im_embed, phi_s_embed], 1)
-        print('\tx cat: ', x.shape)
         x = self.classifier(x)
-        print('\tx: ', x.shape)
-        print('\n\n')
         
         
         return x, x1_embed
