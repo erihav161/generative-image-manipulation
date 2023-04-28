@@ -1,6 +1,6 @@
 # Learning generative image manipulations
 
-Master thesis project @ [Örebro University](oru.se)
+Master thesis project @ [Örebro University](https://www.oru.se)
 
 Using 
 - [x] python and 
