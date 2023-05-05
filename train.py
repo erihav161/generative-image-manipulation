@@ -101,20 +101,20 @@ def train(data, model, lang_model, optimizer, epoch, args, loss_dict):
         output, _, _ ,_ = model(src_img, embedding_tensor)
         
         loss = criterion(output, target_img)
+        # Store loss for tracking
+        epoch_loss.append(loss.item())
         
         # Higher weights on pixels that change more
         # Weight decay depending on number of epochs
-        weight_value = 0
-        tot_epochs = args.from_epoch + args.epochs
-        if 0 <= (args.from_epoch + epoch) < (tot_epochs / 4):
-            weight_value = 999
-        elif (tot_epochs / 4) <= (args.from_epoch + epoch) < (tot_epochs / 2):
-            weight_value = 99
-        elif (tot_epochs / 2) <= (args.from_epoch + epoch) < (3 * tot_epochs / 4):
-            weight_value = 9
-        elif (args.from_epoch + epoch) > (3 * tot_epochs / 4):
-            weight_value = 0
-        weight = ((src_img - target_img)**2)*weight_value + 1
+        weight_value = 0       
+        if epoch < 1000:
+    
+            weight_value = 1000-epoch
+
+        elif epoch >= 1000:
+
+            weight_value = 1
+        weight = ((src_img - target_img)**2)*weight_value
         if torch.cuda.device_count() > 0 and args.cuda:
             weight = weight.type(torch.FloatTensor).cuda()
         else:
@@ -153,11 +153,92 @@ def train(data, model, lang_model, optimizer, epoch, args, loss_dict):
         
     if epoch % 50 == 0:
             tensor = torch.cat((src_img.cpu().data, target_img.cpu().data, output.cpu().data), 0)
-            save_image(tensor, './dc_img/modelG_attention_{}.png'.format(epoch), nrow=args.batch_size, normalize=True, range=(-1, 1))
+            save_image(tensor, './dc_img/modelG_{}_{}.png'.format(args.model, epoch), nrow=args.batch_size, normalize=True, range=(-1, 1))
+            with open('actions_{}_{}.pkl'.format(args.model, epoch), 'wb') as file:
+                dump(action_list, file)
     
     loss_value = sum(epoch_loss)/len(epoch_loss)
     writer.add_scalar('Loss/train', loss_value, epoch)
     loss_dict[epoch] = loss_value
+    
+    
+def validate(data, model, lang_model, epoch, args, loss_dict):
+    model.eval()
+    
+
+    avg_loss = 0.0
+    n_batches = 0
+    epoch_loss = []
+    progress_bar = tqdm(data)
+    criterion = nn.MSELoss(reduction='mean')
+    with torch.no_grad():
+        for batch_idx, sample_batched in enumerate(progress_bar):
+            
+            assert type(sample_batched) is list
+            src_img = np.stack([d['source_img_data'] for d in sample_batched])
+            src_img = torch.from_numpy(src_img).float()
+            target_img = np.stack([d['target_img_data'] for d in sample_batched])
+            target_img = torch.from_numpy(target_img).float()
+            if torch.cuda.device_count() > 0 and args.cuda:
+                src_img = torch.autograd.Variable(src_img).cuda()
+                target_img = torch.autograd.Variable(target_img).cuda()
+            else:
+                src_img = torch.autograd.Variable(src_img).cpu()
+                target_img = torch.autograd.Variable(target_img).cpu()
+            action_list = [str(d['mod']['str']) for d in sample_batched]
+            action_embeddings = lang_model.encode(action_list)
+            embedding_tensor = torch.from_numpy(action_embeddings)
+        
+            
+            # Forward pass
+            output, _, _ ,_ = model(src_img, embedding_tensor)
+            
+            loss = criterion(output, target_img)
+            # Store loss for tracking
+            epoch_loss.append(loss.item())
+            
+            # Higher weights on pixels that change more
+            # Weight decay depending on number of epochs
+            weight_value = 0
+            tot_epochs = args.from_epoch + args.epochs
+            if 0 <= (args.from_epoch + epoch) < (tot_epochs / 4):
+                weight_value = 999
+            elif (tot_epochs / 4) <= (args.from_epoch + epoch) < (tot_epochs / 2):
+                weight_value = 99
+            elif (tot_epochs / 2) <= (args.from_epoch + epoch) < (3 * tot_epochs / 4):
+                weight_value = 9
+            elif (args.from_epoch + epoch) > (3 * tot_epochs / 4):
+                weight_value = 0
+            weight = ((src_img - target_img)**2)*weight_value + 1
+            if torch.cuda.device_count() > 0 and args.cuda:
+                weight = weight.type(torch.FloatTensor).cuda()
+            else:
+                weight = weight.type(torch.FloatTensor).cpu()
+            loss = loss*weight
+            loss = loss.mean()
+            
+            
+            # Store loss for tracking
+            epoch_loss.append(loss.item())
+
+            # Show progress
+            progress_bar.set_postfix(dict(loss=loss.item()))
+            avg_loss += loss.item()
+            n_batches += 1
+            
+            if batch_idx % args.log_interval == 0:
+                avg_loss /= n_batches
+                processed = batch_idx * args.batch_size
+                n_samples = len(data) * args.batch_size
+                progress = float(processed) / n_samples
+                print('\nVal Epoch: {} [{}/{} ({:.0%})] Val loss: {}'.format(
+                    epoch, processed, n_samples, progress, avg_loss))
+                avg_loss = 0.0
+                n_batches = 0
+    
+        loss_value = sum(epoch_loss)/len(epoch_loss)
+        writer.add_scalar('Loss/val', loss_value, epoch)
+        loss_dict[epoch] = loss_value
     
     
 def test(data, model, lang_model, epoch, args, loss_dict):
@@ -224,8 +305,33 @@ def main(args):
 
 
     trainset, testset = load_dataset(args.data_dir)
-    train_loader = trainset.get_loader(batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    test_loader = testset.get_loader(batch_size=args.batch_size, shuffle=batch_shuffle, num_workers=args.num_workers)
+    train_test = torch.utils.data.ConcatDataset([trainset, testset])
+    train_size = int(0.8 * len(train_test))
+    test_val_size = int(0.1 * len(train_test)) + 1
+    print('Size of')
+    print('\tconcatenated dataset: ', len(train_test))
+    print('\ttrain set: ', train_size)
+    print('\ttest set: ', test_val_size)
+    print('\tval set: ', test_val_size)
+    train_dataset, test_dataset, val_dataset = torch.utils.data.random_split(train_test, [train_size, test_val_size, test_val_size])
+    train_dataloader = torch.utils.data.DataLoader(train_dataset, 
+                                                   batch_size=args.batch_size,
+                                                   shuffle=True,
+                                                   num_workers=args.num_workers,
+                                                   drop_last=True,
+                                                   collate_fn=lambda i: i)
+    test_dataloader = torch.utils.data.DataLoader(test_dataset, 
+                                                   batch_size=args.batch_size,
+                                                   shuffle=True,
+                                                   num_workers=args.num_workers,
+                                                   drop_last=True,
+                                                   collate_fn=lambda i: i)
+    val_dataloader = torch.utils.data.DataLoader(val_dataset, 
+                                                   batch_size=args.batch_size,
+                                                   shuffle=True,
+                                                   num_workers=args.num_workers,
+                                                   drop_last=True,
+                                                   collate_fn=lambda i: i)
 
     start_epoch = 1
     if args.resume:
@@ -265,11 +371,14 @@ def main(args):
         model.apply(gimli_v2.weights_init)
     
     progress_bar = trange(start_epoch, args.epochs + 1)
+    t_progress_bar = trange(start_epoch, args.epochs + 1)
+    v_progress_bar = trange(start_epoch, args.epochs + 1)
     
     optimizer = torch.optim.Adamax(model.parameters(), lr=args.lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_step, gamma=args.lr_gamma)
     scheduler.last_epoch = start_epoch
     train_loss = {}
+    val_loss = {}
     test_loss = {}
     start_time = time()
     print('\nTraining ({} epochs) is starting...'.format(args.epochs))
@@ -279,15 +388,18 @@ def main(args):
 
         # TRAIN
         progress_bar.set_description('TRAIN')
-        train(train_loader, model, language_model, optimizer, epoch, args, train_loss)
+        train(train_dataloader, model, language_model, optimizer, epoch, args, train_loss)
 
+        # VALIDATE
+        v_progress_bar.set_description('VAL')
+        validate(val_dataloader, model, language_model, epoch, args, val_loss)
     
         # TEST
-        progress_bar.set_description('TEST')
-        test(test_loader, model, language_model, epoch, args, test_loss)
+        t_progress_bar.set_description('TEST')
+        test(test_dataloader, model, language_model, epoch, args, test_loss)
 
 
-        if epoch % 10 == 0:
+        if epoch % 50 == 0:
             torch.save(model, './model_{}_epoch_{}.pth'.format(args.model, epoch))
     
     total_time = time() - start_time
@@ -295,10 +407,13 @@ def main(args):
     writer.add_scalar('Total time', total_time)
     writer.flush()
     # Store training loss
-    with open('./train_loss.pkl', 'wb') as file:
+    with open('./{}_train_loss_{}_epochs.pkl'.format(args.model, args.epochs), 'wb') as file:
         dump(train_loss, file)
+    # Store validation loss
+    with open('./{}_val_loss_{}_epochs.pkl'.format(args.model, args.epochs), 'wb') as file:
+        dump(val_loss, file)
     # Store testing loss
-    with open('./test_loss.pkl', 'wb') as file:
+    with open('./{}_test_loss_{}_epochs.pkl'.format(args.model, args.epochs), 'wb') as file:
         dump(test_loss, file)
     # writer.close()
 
