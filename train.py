@@ -38,6 +38,7 @@ import gimli
 import gimli_v2
 import gimli_with_attention
 from pickle import dump
+from utils import SaveBestModel, save_model, save_plots
 
 writer = SummaryWriter()
 
@@ -108,17 +109,17 @@ def train(data, model, lang_model, optimizer, epoch, args, loss_dict):
         # Weight decay depending on number of epochs
         weight_value = 0       
         if epoch < 1000:
-    
             weight_value = 1000-epoch
-
         elif epoch >= 1000:
-
             weight_value = 1
+            
         weight = ((src_img - target_img)**2)*weight_value
+        
         if torch.cuda.device_count() > 0 and args.cuda:
             weight = weight.type(torch.FloatTensor).cuda()
         else:
             weight = weight.type(torch.FloatTensor).cpu()
+            
         loss = loss*weight
         loss = loss.mean()
         
@@ -161,6 +162,8 @@ def train(data, model, lang_model, optimizer, epoch, args, loss_dict):
     writer.add_scalar('Loss/train', loss_value, epoch)
     loss_dict[epoch] = loss_value
     
+    return criterion
+    
     
 def validate(data, model, lang_model, epoch, args, loss_dict):
     model.eval()
@@ -199,27 +202,24 @@ def validate(data, model, lang_model, epoch, args, loss_dict):
             
             # Higher weights on pixels that change more
             # Weight decay depending on number of epochs
-            weight_value = 0
-            tot_epochs = args.from_epoch + args.epochs
-            if 0 <= (args.from_epoch + epoch) < (tot_epochs / 4):
-                weight_value = 999
-            elif (tot_epochs / 4) <= (args.from_epoch + epoch) < (tot_epochs / 2):
-                weight_value = 99
-            elif (tot_epochs / 2) <= (args.from_epoch + epoch) < (3 * tot_epochs / 4):
-                weight_value = 9
-            elif (args.from_epoch + epoch) > (3 * tot_epochs / 4):
-                weight_value = 0
-            weight = ((src_img - target_img)**2)*weight_value + 1
-            if torch.cuda.device_count() > 0 and args.cuda:
-                weight = weight.type(torch.FloatTensor).cuda()
-            else:
-                weight = weight.type(torch.FloatTensor).cpu()
-            loss = loss*weight
-            loss = loss.mean()
+            # weight_value = 0
+            # tot_epochs = args.from_epoch + args.epochs
+            # if 0 <= (args.from_epoch + epoch) < (tot_epochs / 4):
+            #     weight_value = 999
+            # elif (tot_epochs / 4) <= (args.from_epoch + epoch) < (tot_epochs / 2):
+            #     weight_value = 99
+            # elif (tot_epochs / 2) <= (args.from_epoch + epoch) < (3 * tot_epochs / 4):
+            #     weight_value = 9
+            # elif (args.from_epoch + epoch) > (3 * tot_epochs / 4):
+            #     weight_value = 0
+            # weight = ((src_img - target_img)**2)*weight_value + 1
+            # if torch.cuda.device_count() > 0 and args.cuda:
+            #     weight = weight.type(torch.FloatTensor).cuda()
+            # else:
+            #     weight = weight.type(torch.FloatTensor).cpu()
+            # loss = loss*weight
+            # loss = loss.mean()
             
-            
-            # Store loss for tracking
-            epoch_loss.append(loss.item())
 
             # Show progress
             progress_bar.set_postfix(dict(loss=loss.item()))
@@ -239,6 +239,8 @@ def validate(data, model, lang_model, epoch, args, loss_dict):
         loss_value = sum(epoch_loss)/len(epoch_loss)
         writer.add_scalar('Loss/val', loss_value, epoch)
         loss_dict[epoch] = loss_value
+        
+        return loss_value
     
     
 def test(data, model, lang_model, epoch, args, loss_dict):
@@ -332,7 +334,7 @@ def main(args):
                                                    num_workers=args.num_workers,
                                                    drop_last=True,
                                                    collate_fn=lambda i: i)
-
+    model_name = ''
     start_epoch = 1
     if args.resume:
         filename = args.resume
@@ -351,10 +353,13 @@ def main(args):
     else:
         if 'original' in args.model.lower():
             model = gimli.generator()
+            model_name = 'gimli-og'
         elif 'v2' in args.model.lower():
             model = gimli_v2.generator()
+            model_name = 'gimli-1k'
         elif 'attention' in args.model.lower():
             model = gimli_with_attention.generator()
+            model_name = 'gimli-attn'
     
     # print(model)
     # language_model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -381,6 +386,7 @@ def main(args):
     val_loss = {}
     test_loss = {}
     start_time = time()
+    save_best = SaveBestModel()
     print('\nTraining ({} epochs) is starting...'.format(args.epochs))
     for epoch in progress_bar:
         
@@ -388,32 +394,35 @@ def main(args):
 
         # TRAIN
         progress_bar.set_description('TRAIN')
-        train(train_dataloader, model, language_model, optimizer, epoch, args, train_loss)
+        criterion = train(train_dataloader, model, language_model, optimizer, epoch, args, train_loss)
 
         # VALIDATE
         v_progress_bar.set_description('VAL')
-        validate(val_dataloader, model, language_model, epoch, args, val_loss)
-    
+        validation = validate(val_dataloader, model, language_model, epoch, args, val_loss)
+
+        # Save the best model
+        save_best(validation, epoch, model, optimizer, criterion, model_name)
+        
         # TEST
         t_progress_bar.set_description('TEST')
         test(test_dataloader, model, language_model, epoch, args, test_loss)
 
 
         if epoch % 50 == 0:
-            torch.save(model, './model_{}_epoch_{}.pth'.format(args.model, epoch))
+            torch.save(model.state_dict(), './{}_epoch_{}.pth'.format(model_name, epoch))
     
     total_time = time() - start_time
     print('\nTotal time taken:\n\t{}\n'.format(total_time))
     writer.add_scalar('Total time', total_time)
     writer.flush()
     # Store training loss
-    with open('./{}_train_loss_{}_epochs.pkl'.format(args.model, args.epochs), 'wb') as file:
+    with open('./{}_train_loss_{}_epochs.pkl'.format(model_name, args.epochs), 'wb') as file:
         dump(train_loss, file)
     # Store validation loss
-    with open('./{}_val_loss_{}_epochs.pkl'.format(args.model, args.epochs), 'wb') as file:
+    with open('./{}_val_loss_{}_epochs.pkl'.format(model_name, args.epochs), 'wb') as file:
         dump(val_loss, file)
     # Store testing loss
-    with open('./{}_test_loss_{}_epochs.pkl'.format(args.model, args.epochs), 'wb') as file:
+    with open('./{}_test_loss_{}_epochs.pkl'.format(model_name, args.epochs), 'wb') as file:
         dump(test_loss, file)
     # writer.close()
 
